@@ -32,16 +32,18 @@ def test_greeting_skips_retrieval_and_llm_entirely(mock_store, mock_llm):
     mock_llm.assert_not_called()
 
 
-@patch("app.api.chat.classify_intent")
+@patch("app.api.chat.generate_general_answer")
 @patch("app.api.chat.get_vector_store")
-def test_low_confidence_policy_question_escalates_without_calling_llm(mock_store, mock_classify):
+def test_low_confidence_policy_question_escalates_without_calling_grounded_llm(
+    mock_store, mock_general
+):
     mock_store.return_value.query.return_value = [
         RetrievedChunk(doc="Shipping Policy", heading="Address Changes", text="...", score=0.05)
     ]
-    mock_classify.return_value = "policy"
-    with patch("app.api.chat.generate_grounded_answer") as mock_grounded, patch(
-        "app.api.chat.generate_general_answer"
-    ) as mock_general:
+    # None signals "this needs grounding I don't have" -- see
+    # app/agent/prompts.py's ESCALATION_SENTINEL.
+    mock_general.return_value = None
+    with patch("app.api.chat.generate_grounded_answer") as mock_grounded:
         resp = client.post(
             "/chat",
             json={"message": "Can I get store credit refunded to a gift card?", "session_id": "s1"},
@@ -51,21 +53,18 @@ def test_low_confidence_policy_question_escalates_without_calling_llm(mock_store
     assert body["escalated"] is True
     assert body["escalation_reason"] == "low_retrieval_confidence"
     assert body["citations"] == []
+    mock_general.assert_called_once()
     mock_grounded.assert_not_called()
-    mock_general.assert_not_called()
 
 
-@patch("app.api.chat.classify_intent")
+@patch("app.api.chat.generate_general_answer")
 @patch("app.api.chat.get_vector_store")
-def test_low_confidence_general_question_answers_without_escalating(mock_store, mock_classify):
+def test_low_confidence_general_question_answers_without_escalating(mock_store, mock_general):
     mock_store.return_value.query.return_value = [
         RetrievedChunk(doc="Shipping Policy", heading="Address Changes", text="...", score=0.03)
     ]
-    mock_classify.return_value = "general"
-    with patch("app.api.chat.generate_general_answer") as mock_general, patch(
-        "app.api.chat.generate_grounded_answer"
-    ) as mock_grounded:
-        mock_general.return_value = "The capital of France is Paris."
+    mock_general.return_value = "The capital of France is Paris."
+    with patch("app.api.chat.generate_grounded_answer") as mock_grounded:
         resp = client.post(
             "/chat",
             json={"message": "What is the capital of France?", "session_id": "s1"},

@@ -4,7 +4,7 @@ import anthropic
 
 from app.agent.errors import AgentError
 from app.agent.prompts import (
-    CLASSIFIER_SYSTEM_PROMPT,
+    ESCALATION_SENTINEL,
     GENERAL_CHAT_SYSTEM_PROMPT,
     RAG_SYSTEM_PROMPT,
     build_context_block,
@@ -83,29 +83,18 @@ def generate_grounded_answer(
     return _text_of(response)
 
 
-def generate_general_answer(question: str, history: list[dict[str, str]]) -> str:
-    """Answer a non-policy question conversationally, with no retrieved context."""
+def generate_general_answer(question: str, history: list[dict[str, str]]) -> str | None:
+    """Answer a non-policy question conversationally, with no retrieved context.
+
+    Single LLM call that both decides *and* answers (the system prompt asks
+    for the ESCALATION_SENTINEL token instead of an answer when the question
+    is policy-shaped) -- this used to be two sequential calls (classify, then
+    answer), which doubled latency on every low-confidence turn. Returns None
+    to signal "this needs to escalate instead" rather than raising, since it's
+    an expected outcome, not an error.
+    """
     settings = get_settings()
     messages = [*history, {"role": "user", "content": question}]
     response = _call(settings.agent_model, GENERAL_CHAT_SYSTEM_PROMPT, messages, max_tokens=1024)
-    return _text_of(response)
-
-
-def classify_intent(message: str) -> str:
-    """Return "policy" or "general". Fails safe to "policy" on any error."""
-    settings = get_settings()
-    try:
-        # 30 tokens of headroom, not the theoretical minimum -- see the NVIDIA
-        # client's comment on this same constant for why a tighter budget is risky.
-        response = _call(
-            settings.classifier_model,
-            CLASSIFIER_SYSTEM_PROMPT,
-            [{"role": "user", "content": message}],
-            max_tokens=30,
-        )
-    except AgentError as e:
-        logger.warning("Intent classification failed, defaulting to 'policy': %s", e)
-        return "policy"
-    raw = _text_of(response)
-    logger.info("classify_intent(%r) -> raw model output: %r", message, raw)
-    return "general" if "general" in raw.lower() else "policy"
+    text = _text_of(response)
+    return None if ESCALATION_SENTINEL in text else text

@@ -4,9 +4,9 @@ A self-hosted AI customer support agent built on FastAPI, ChromaDB, and Claude (
 free NIM models — see [Choosing an LLM provider](#choosing-an-llm-provider)). Answers customer
 questions by retrieving grounded context from a markdown knowledge base and citing its
 sources — it never answers *policy/product* questions from general model knowledge. It'll
-still chat normally about anything else (greetings, general-knowledge questions), but a
-lightweight classifier keeps that separate from the strict, cited, policy-grounded path so the
-two never blur together.
+still chat normally about anything else (greetings, general-knowledge questions), kept
+separate from the strict, cited, policy-grounded path so the two never blur together — with at
+most one LLM call per turn either way, so adding that separation doesn't cost extra latency.
 
 **Status: Phase 1 (knowledge base + RAG chat) is built and working end-to-end.** Tool use
 (order lookup, refunds), conversation memory summarization, guardrails, and the admin
@@ -27,11 +27,12 @@ User message
 [Confidence gate] ── top score >= threshold?
    │ no                                          │ yes
    ▼                                              ▼
-[Classifier] ── policy-shaped question?    [LLM] ── answers ONLY from the retrieved
-   │ yes            │ no                          chunks, with inline citations
-   ▼                ▼
-"I don't know,   [LLM] ── answers freely,
- escalate?"        no citations, no KB claims
+[LLM] ── one call: answers freely if this      [LLM] ── answers ONLY from the retrieved
+ isn't policy-shaped, or returns a sentinel      chunks, with inline citations
+ meaning "this needs grounding I don't have"
+   │              │
+"I don't know,   normal chat answer,
+ escalate?"       no citations, no KB claims
    │                │
    └────────┬───────┘
             ▼
@@ -45,10 +46,12 @@ The confidence gate is enforced in code (`backend/app/api/chat.py`), not just in
 prompt — if retrieval doesn't clear `RETRIEVAL_CONFIDENCE_THRESHOLD`, the grounded-answer LLM
 call never happens. Below that threshold, a message is either genuinely out of scope for the
 knowledge base (routed to escalation) or just general conversation the KB was never going to
-cover (routed to a normal, ungrounded chat reply) — a small classifier call tells those apart.
+cover (routed to a normal, ungrounded chat reply). One LLM call decides *and* answers — the
+system prompt asks the model to output a fixed sentinel token instead of an answer when the
+question is policy-shaped, so there's no separate classification round-trip adding latency.
 Either way, the strict "answer only from retrieved context, cite your sources" path only ever
 runs when there's actually retrieved context to ground it in, so a policy question with no
-matching documentation can't get an invented answer.
+matching documentation can't get an invented answer. **Every turn costs at most one LLM call.**
 
 ## Project layout
 
@@ -145,11 +148,10 @@ Open `http://localhost:5173`.
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` | `anthropic` or `nvidia` — see "Choosing an LLM provider" above. |
 | `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=anthropic`. Without it, `/chat` still runs and returns a graceful "not configured" escalation instead of crashing. |
-| `AGENT_MODEL` | `claude-sonnet-4-6` | Model used to generate grounded answers (Anthropic provider only). |
-| `CLASSIFIER_MODEL` | `claude-haiku-4-5` | Reserved for Phase 4's cheap intent/safety classifier. |
+| `AGENT_MODEL` | `claude-sonnet-4-6` | Model used to generate answers (Anthropic provider only). |
 | `NVIDIA_API_KEY` | — | Required when `LLM_PROVIDER=nvidia`. Free key from build.nvidia.com. |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA's OpenAI-compatible endpoint. |
-| `NVIDIA_MODEL` | `meta/llama-3.1-70b-instruct` | Model used when `LLM_PROVIDER=nvidia` — check build.nvidia.com for current availability. |
+| `NVIDIA_MODEL` | `meta/llama-3.1-8b-instruct` | Model used when `LLM_PROVIDER=nvidia`. An 8B model by default for lower latency on the free tier — check build.nvidia.com for current availability, or bump to a 70B model for better quality at the cost of speed. |
 | `DATABASE_URL` | `sqlite:///./support_agent.db` | Swap for a `postgresql://...` URL in production — the schema is driver-agnostic. |
 | `CHROMA_DIR` | `./chroma_data` | Where the vector index persists on disk. |
 | `KNOWLEDGE_BASE_DIR` | `./knowledge_base` | Folder scanned by the ingestion script. |
@@ -280,9 +282,10 @@ Not yet built — next phases, in the order described in the original project br
   "needs confirmation" step in both the API and the chat widget).
 - **Phase 3 — Memory**: persist conversation summaries so long threads don't resend full
   transcripts every turn.
-- **Phase 4 — Guardrails**: a cheap classifier pass (`CLASSIFIER_MODEL`) for intent/safety
-  routing, stronger prompt-injection sanitization of retrieved content, scope refusals, and
-  per-session rate limiting.
+- **Phase 4 — Guardrails**: stronger prompt-injection sanitization of retrieved content,
+  explicit refusals for legal/medical/abusive content, and per-session rate limiting. (Intent
+  routing between policy and general chat already exists — see Architecture above — folded
+  into the single answer call rather than a separate classifier pass, to keep latency down.)
 - **Phase 5 — Admin dashboard**: a React view over the `retrieval_audit_logs` table already
   being populated — live conversations, escalations, KB doc management, deflection-rate
   analytics.

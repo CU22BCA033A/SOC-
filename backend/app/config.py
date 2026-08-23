@@ -15,12 +15,16 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     agent_model: str = "claude-sonnet-4-6"
-    classifier_model: str = "claude-haiku-4-5"
 
     # Only used when llm_provider = "nvidia". Get a free key at build.nvidia.com.
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "meta/llama-3.1-70b-instruct"
+    # An 8B model, not NVIDIA's largest, because it responds noticeably faster
+    # on the free tier -- every chat turn is at most one LLM call (see
+    # app/agent/prompts.py), so model latency directly is turn latency. Trade
+    # a little quality for speed; bump to a 70B model in .env if you'd rather
+    # go the other way.
+    nvidia_model: str = "meta/llama-3.1-8b-instruct"
 
     database_url: str = f"sqlite:///{BACKEND_DIR / 'support_agent.db'}"
     chroma_dir: str = str(BACKEND_DIR / "chroma_data")

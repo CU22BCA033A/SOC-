@@ -17,7 +17,7 @@ import openai
 
 from app.agent.errors import AgentError
 from app.agent.prompts import (
-    CLASSIFIER_SYSTEM_PROMPT,
+    ESCALATION_SENTINEL,
     GENERAL_CHAT_SYSTEM_PROMPT,
     RAG_SYSTEM_PROMPT,
     build_context_block,
@@ -112,33 +112,17 @@ def generate_grounded_answer(
     return text
 
 
-def generate_general_answer(question: str, history: list[dict[str, str]]) -> str:
-    """Answer a non-policy question conversationally, with no retrieved context."""
+def generate_general_answer(question: str, history: list[dict[str, str]]) -> str | None:
+    """Answer a non-policy question conversationally, with no retrieved context.
+
+    Single LLM call that both decides *and* answers (the system prompt asks
+    for the ESCALATION_SENTINEL token instead of an answer when the question
+    is policy-shaped) -- this used to be two sequential calls (classify, then
+    answer), which doubled latency on every low-confidence turn. Returns None
+    to signal "this needs to escalate instead" rather than raising, since it's
+    an expected outcome, not an error.
+    """
     messages = [*history, {"role": "user", "content": question}]
     response = _call(GENERAL_CHAT_SYSTEM_PROMPT, messages, max_tokens=1024)
     text = _text_of(response)
-    return text or "I'm not sure how to answer that — could you rephrase?"
-
-
-def classify_intent(message: str) -> str:
-    """Return "policy" or "general". Fails safe to "policy" on any error.
-
-    Uses the same NVIDIA_MODEL as the main chat path (NVIDIA's free tier
-    doesn't get a separate lightweight classifier model configured here, to
-    keep the free-tier setup to a single API key/model).
-    """
-    try:
-        # 30 tokens of headroom (not the theoretical minimum) -- open-model chat
-        # templates often prepend whitespace/punctuation as separate tokens
-        # before the actual word, and a too-tight budget risks truncating
-        # "general" mid-word, which would silently and incorrectly fall
-        # through to the "policy" (escalate) branch below.
-        response = _call(
-            CLASSIFIER_SYSTEM_PROMPT, [{"role": "user", "content": message}], max_tokens=30
-        )
-    except AgentError as e:
-        logger.warning("Intent classification failed, defaulting to 'policy': %s", e)
-        return "policy"
-    raw = _text_of(response)
-    logger.info("classify_intent(%r) -> raw model output: %r", message, raw)
-    return "general" if "general" in raw.lower() else "policy"
+    return None if ESCALATION_SENTINEL in text else text

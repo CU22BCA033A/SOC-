@@ -3,7 +3,7 @@ import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.agent.router import AgentError, classify_intent, generate_general_answer, generate_grounded_answer
+from app.agent.router import AgentError, generate_general_answer, generate_grounded_answer
 from app.agent.smalltalk import smalltalk_reply
 from app.config import get_settings
 from app.db import get_db
@@ -48,24 +48,25 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         if not retrieved or top_score < settings.retrieval_confidence_threshold:
             # Low/no retrieval match doesn't necessarily mean "out of scope" --
             # it could be general conversation the KB was never going to cover.
-            # Classify before deciding whether to escalate or just chat: a
-            # policy-shaped question with no grounding still escalates rather
-            # than risk an invented answer; a general question gets answered
-            # normally, just without citations.
-            intent = classify_intent(req.message)
-            if intent == "general":
-                try:
-                    answer = generate_general_answer(req.message, history)
-                except AgentError as e:
-                    answer = (
-                        f"{e} I've noted this so a human agent can follow up — sorry for the trouble."
-                    )
-                    escalated = True
-                    escalation_reason = "agent_error"
-            else:
-                answer = NO_MATCH_MESSAGE
+            # One LLM call both decides and answers: it either responds
+            # normally (general chat, no citations) or signals "this needs
+            # grounding I don't have" by returning None, in which case we
+            # escalate rather than risk an invented policy answer.
+            try:
+                general_answer = generate_general_answer(req.message, history)
+            except AgentError as e:
+                answer = (
+                    f"{e} I've noted this so a human agent can follow up — sorry for the trouble."
+                )
                 escalated = True
-                escalation_reason = "low_retrieval_confidence"
+                escalation_reason = "agent_error"
+            else:
+                if general_answer is None:
+                    answer = NO_MATCH_MESSAGE
+                    escalated = True
+                    escalation_reason = "low_retrieval_confidence"
+                else:
+                    answer = general_answer
         else:
             chunk_dicts = [{"doc": r.doc, "heading": r.heading, "text": r.text} for r in retrieved]
             try:

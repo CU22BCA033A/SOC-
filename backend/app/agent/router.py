@@ -8,7 +8,7 @@ from app.agent import claude_client, nvidia_client
 from app.agent.errors import AgentError
 from app.config import get_settings
 
-__all__ = ["AgentError", "classify_intent", "generate_general_answer", "generate_grounded_answer"]
+__all__ = ["AgentError", "generate_general_answer", "generate_grounded_answer"]
 
 _PROVIDER_MODULES = {
     "anthropic": claude_client,
@@ -37,9 +37,6 @@ def generate_grounded_answer(
     return _module().generate_grounded_answer(question, history, retrieved_chunks)
 
 
-def generate_general_answer(question: str, history: list[dict[str, str]]) -> str:
+def generate_general_answer(question: str, history: list[dict[str, str]]) -> str | None:
+    """Returns None when the model determined this needs to escalate instead."""
     return _module().generate_general_answer(question, history)
-
-
-def classify_intent(message: str) -> str:
-    return _module().classify_intent(message)

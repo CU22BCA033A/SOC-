@@ -21,13 +21,12 @@ services:
         sync: false # set this manually in the Render dashboard — never commit it
       - key: AGENT_MODEL
         value: claude-sonnet-4-6
-      - key: CLASSIFIER_MODEL
-        value: claude-haiku-4-5
       # Only read when LLM_PROVIDER=nvidia. Free key at build.nvidia.com.
       - key: NVIDIA_API_KEY
         sync: false
+      # 8B, not NVIDIA's largest model, for lower latency on the free tier.
       - key: NVIDIA_MODEL
-        value: meta/llama-3.1-70b-instruct
+        value: meta/llama-3.1-8b-instruct
       # SQLite lives on local disk, which Render's free tier does not persist
       # across deploys/restarts. That's fine for testing (conversation
       # history resets on redeploy); for anything longer-lived, point this at
